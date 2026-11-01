@@ -2,6 +2,7 @@ from fastapi import FastAPI
 from pydantic import BaseModel, HttpUrl
 from fastapi.responses import JSONResponse, RedirectResponse
 from app.short_code import generate_short_code
+from app.database import get_db_connection
 
 app = FastAPI()
 
@@ -23,25 +24,58 @@ def health():
     )
 
 @app.get("/{short_code}")
-def redirect_url(short_code: str):
-    if short_code in url_storage:
-        original_url = url_storage[short_code]
+async def redirect_url(short_code: str):
+    connection = await get_db_connection()
+
+    try:
+        async with connection.cursor() as cursor:
+            await cursor.execute(
+                """
+                SELECT original_url
+                FROM urls
+                WHERE short_code = %s
+                """,
+                (short_code,)
+            )
+
+            result = await cursor.fetchone()
+
+    finally:
+        await connection.close()
+
+    if result:
+        original_url = result[0]
 
         return RedirectResponse(
             status_code=302,
-            url=original_url
+            url = original_url
         )
-    else:
-        return JSONResponse(
-            status_code=404,
-            content={"message": "Short URL not found"}
-        )
+
+    return JSONResponse(
+        status_code=404,
+        content={"message": "Short URL not found"}
+    )
 
 @app.post("/api/v1/urls")
-def create_short_url(request: URLRequest):
+async def create_short_url(request: URLRequest):
     short_code = generate_short_code()
 
-    url_storage[short_code] = str(request.original_url)
+    connection = await get_db_connection()
+
+    try:
+        async with connection.cursor() as cursor:
+            await cursor.execute(
+                """
+                INSERT INTO urls (short_code, original_url)
+                VALUES(%s, %s)
+                """,
+                (short_code, str(request.original_url))
+            )
+
+        await connection.commit()
+
+    finally:
+        await connection.close()
 
     return JSONResponse(
         status_code=201,
@@ -50,5 +84,3 @@ def create_short_url(request: URLRequest):
             "short_code": short_code
         }
     )
-
-url_storage = {}
