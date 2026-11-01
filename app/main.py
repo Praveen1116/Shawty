@@ -4,6 +4,8 @@ from fastapi.responses import JSONResponse, RedirectResponse
 from app.short_code import generate_short_code
 from app.database import get_db_connection
 
+import psycopg
+
 app = FastAPI()
 
 class URLRequest(BaseModel):
@@ -58,24 +60,30 @@ async def redirect_url(short_code: str):
 
 @app.post("/api/v1/urls")
 async def create_short_url(request: URLRequest):
-    short_code = generate_short_code()
+    for attempt in range(3):
+        short_code = generate_short_code()
 
-    connection = await get_db_connection()
+        connection = await get_db_connection()
 
-    try:
-        async with connection.cursor() as cursor:
-            await cursor.execute(
-                """
-                INSERT INTO urls (short_code, original_url)
-                VALUES(%s, %s)
-                """,
-                (short_code, str(request.original_url))
-            )
+        try:
+            async with connection.cursor() as cursor:
+                await cursor.execute(
+                    """
+                    INSERT INTO urls (short_code, original_url)
+                    VALUES(%s, %s)
+                    """,
+                    (short_code, str(request.original_url))
+                )
 
-        await connection.commit()
+            await connection.commit()
+            break
 
-    finally:
-        await connection.close()
+        except psycopg.errors.UniqueViolation:
+            if attempt == 2:
+                raise
+
+        finally:
+            await connection.close()
 
     return JSONResponse(
         status_code=201,
