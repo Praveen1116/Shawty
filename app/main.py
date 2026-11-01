@@ -1,4 +1,4 @@
-from fastapi import FastAPI
+from fastapi import FastAPI, HTTPException
 from pydantic import BaseModel, HttpUrl
 from fastapi.responses import JSONResponse, RedirectResponse
 from app.short_code import generate_short_code
@@ -27,9 +27,11 @@ def health():
 
 @app.get("/{short_code}")
 async def redirect_url(short_code: str):
-    connection = await get_db_connection()
+    connection = None
 
     try:
+        connection = await get_db_connection()
+
         async with connection.cursor() as cursor:
             await cursor.execute(
                 """
@@ -42,8 +44,15 @@ async def redirect_url(short_code: str):
 
             result = await cursor.fetchone()
 
+    except psycopg.OperationalError:
+        raise HTTPException(
+            status_code=503,
+            detail="Database temporarily unavailable"
+        )
+
     finally:
-        await connection.close()
+        if connection is not None:
+            await connection.close()
 
     if result:
         original_url = result[0]
@@ -61,11 +70,12 @@ async def redirect_url(short_code: str):
 @app.post("/api/v1/urls")
 async def create_short_url(request: URLRequest):
     for attempt in range(3):
-        short_code = generate_short_code()
-
-        connection = await get_db_connection()
+        connection = None
 
         try:
+            short_code = generate_short_code()
+            connection = await get_db_connection()
+
             async with connection.cursor() as cursor:
                 await cursor.execute(
                     """
@@ -82,8 +92,15 @@ async def create_short_url(request: URLRequest):
             if attempt == 2:
                 raise
 
+        except psycopg.OperationalError:
+            raise HTTPException(
+                status_code=503,
+                detail="Database temporarily unavailable"
+            )
+
         finally:
-            await connection.close()
+            if connection is not None:
+                await connection.close()
 
     return JSONResponse(
         status_code=201,
