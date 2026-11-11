@@ -1,10 +1,13 @@
-from fastapi import FastAPI, HTTPException
+from fastapi import FastAPI, HTTPException, Depends
 from pydantic import BaseModel, HttpUrl
 from fastapi.responses import JSONResponse, RedirectResponse
-from app.short_code import generate_short_code
-from app.database import get_db_connection
+from sqlalchemy.ext.asyncio import AsyncSession
+from sqlalchemy import select
+from sqlalchemy.exc import IntegrityError, OperationalError
 
-import psycopg
+from app.short_code import generate_short_code
+from app.database import get_db_session
+from app.models import URL
 
 app = FastAPI()
 
@@ -26,41 +29,18 @@ def health():
     )
 
 @app.get("/{short_code}")
-async def redirect_url(short_code: str):
-    connection = None
-
+async def redirect_url(short_code: str, session: AsyncSession = Depends(get_db_session)):
     try:
-        connection = await get_db_connection()
+        stmt = select(URL).where(URL.short_code == short_code)
+        result = await session.execute(stmt)
+        url_entry = result.scalar_one_or_none()
 
-        async with connection.cursor() as cursor:
-            await cursor.execute(
-                """
-                SELECT original_url
-                FROM urls
-                WHERE short_code = %s
-                """,
-                (short_code,)
-            )
+    except OperationalError:
+        raise HTTPException(status_code=503, detail="Database temporarily unavailable")
 
-            result = await cursor.fetchone()
 
-    except psycopg.OperationalError:
-        raise HTTPException(
-            status_code=503,
-            detail="Database temporarily unavailable"
-        )
-
-    finally:
-        if connection is not None:
-            await connection.close()
-
-    if result:
-        original_url = result[0]
-
-        return RedirectResponse(
-            status_code=302,
-            url = original_url
-        )
+    if url_entry:
+        return RedirectResponse(status_code=302, url=url_entry.original_url)
 
     return JSONResponse(
         status_code=404,
@@ -68,39 +48,31 @@ async def redirect_url(short_code: str):
     )
 
 @app.post("/api/v1/urls")
-async def create_short_url(request: URLRequest):
+async def create_short_url(request: URLRequest, session: AsyncSession = Depends(get_db_session)):
     for attempt in range(3):
-        connection = None
-
         try:
             short_code = generate_short_code()
-            connection = await get_db_connection()
+            new_url = URL(short_code=short_code,
+                          original_url = str(request.original_url)
+                          )
 
-            async with connection.cursor() as cursor:
-                await cursor.execute(
-                    """
-                    INSERT INTO urls (short_code, original_url)
-                    VALUES(%s, %s)
-                    """,
-                    (short_code, str(request.original_url))
-                )
+            session.add(new_url)
 
-            await connection.commit()
+            await session.commit()
             break
 
-        except psycopg.errors.UniqueViolation:
+        except IntegrityError:
+            await session.rollback()
+
             if attempt == 2:
                 raise
 
-        except psycopg.OperationalError:
+        except OperationalError:
+            await session.rollback()
             raise HTTPException(
                 status_code=503,
                 detail="Database temporarily unavailable"
             )
-
-        finally:
-            if connection is not None:
-                await connection.close()
 
     return JSONResponse(
         status_code=201,

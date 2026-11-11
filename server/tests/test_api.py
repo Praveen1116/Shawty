@@ -1,6 +1,8 @@
 from fastapi.testclient import TestClient
 from app.main import app
-from unittest.mock import patch,  AsyncMock
+from app.database import get_db_session
+from unittest.mock import MagicMock,  AsyncMock
+from sqlalchemy.exc import OperationalError
 import psycopg
 
 client = TestClient(app)
@@ -57,15 +59,24 @@ def test_redirect_nonexistent_short_code():
 
 
 def test_create_short_url_database_unavailable():
-    with patch(
-        "app.main.get_db_connection",
-        new_callable=AsyncMock,
-        side_effect=psycopg.OperationalError("Database unavailable")
-    ):
+    mock_session = MagicMock()
+    mock_session.commit = AsyncMock(
+        side_effect=OperationalError("Database unavailable", None, None)
+    )
+    mock_session.rollback = AsyncMock()
+
+    async def override_get_db_session():
+        yield mock_session
+
+    app.dependency_overrides[get_db_session] = override_get_db_session
+
+    try:
         response = client.post(
             "/api/v1/urls",
             json={"original_url": "https://exampletest.com"}
         )
+    finally:
+        app.dependency_overrides.clear()
 
     assert response.status_code == 503
     assert response.json() == {

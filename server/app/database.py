@@ -41,10 +41,3 @@ class Base(DeclarativeBase):
 async def get_db_session():
     async with SessionLocal() as session:
         yield session
-
-async def get_db_connection():
-    return await psycopg.AsyncConnection.connect(RAW_DATABASE_URL)
-
-
-async def get_db_connection():
-    return await psycopg.AsyncConnection.connect(RAW_DATABASE_URL)
