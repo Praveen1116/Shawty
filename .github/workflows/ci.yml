@@ -92,12 +92,17 @@ jobs:
           npm run build
 
   # -------------------------------------------------------------
-  # 3. Docker Verification (Ensures container images build cleanly)
+  # 3. Docker Verification & GHCR Publishing
   # -------------------------------------------------------------
   docker-build:
-    name: Docker Build Verification
+    name: Docker Build & Publish
     needs: [backend-tests, frontend-checks]
     runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      packages: write
+    env:
+      IMAGE_REPO: ghcr.io/praveen1116/shawty-backend
 
     steps:
       - name: Checkout repository
@@ -109,3 +114,21 @@ jobs:
       - name: Verify Docker Compose builds
         run: |
           docker compose build
+
+      - name: Log in to GitHub Container Registry
+        if: github.event_name == 'push' && github.ref == 'refs/heads/main'
+        uses: docker/login-action@v3
+        with:
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Build and push Backend image to GHCR
+        if: github.event_name == 'push' && github.ref == 'refs/heads/main'
+        uses: docker/build-push-action@v6
+        with:
+          context: ./server
+          push: true
+          tags: |
+            ${{ env.IMAGE_REPO }}:latest
+            ${{ env.IMAGE_REPO }}:${{ github.sha }}
