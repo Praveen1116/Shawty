@@ -87,16 +87,6 @@ export function validateUrlInput(rawUrl: string): { isValid: boolean; error?: st
  * routes via Vite proxy (/api/v1/urls) to prevent browser CORS errors.
  */
 export function getApiEndpoint(): string {
-  if (typeof window !== 'undefined' && API_BASE_URL) {
-    try {
-      const parsed = new URL(API_BASE_URL, window.location.href);
-      if (parsed.origin !== window.location.origin) {
-        return '/api/v1/urls';
-      }
-    } catch {
-      return '/api/v1/urls';
-    }
-  }
   return API_BASE_URL ? `${API_BASE_URL}/api/v1/urls` : '/api/v1/urls';
 }
 
@@ -125,27 +115,10 @@ export async function shortenUrl(rawUrl: string): Promise<ShortenUrlResponse> {
       },
       body: JSON.stringify(payload),
     });
-  } catch (primaryErr) {
-    // If request failed and we tried direct endpoint, fallback to /api/v1/urls
-    if (endpoint !== '/api/v1/urls') {
-      try {
-        response = await fetch('/api/v1/urls', {
-          method: 'POST',
-          headers: {
-            'Content-Type': 'application/json',
-          },
-          body: JSON.stringify(payload),
-        });
-      } catch (fallbackErr) {
-        throw new Error('Unable to connect to the backend server. Please ensure the server is running.', {
-          cause: fallbackErr,
-        });
-      }
-    } else {
-      throw new Error('Unable to connect to the backend server. Please check your connection.', {
-        cause: primaryErr,
-      });
-    }
+  } catch (err) {
+    throw new Error('Unable to connect to the backend server. Please check your connection.', {
+      cause: err,
+    });
   }
 
   if (response.ok) {
